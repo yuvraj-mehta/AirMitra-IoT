@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="12" fill="#0D47A1"/>
+  <!-- Central hub -->
+  <circle cx="32" cy="32" r="6" fill="#FFFFFF"/>
+  <!-- Fan blades -->
+  <path fill="#BBDEFB" d="M32 14c-2.8 0-5 2.2-5 5 0 1.8.9 3.4 2.3 4.3l4.4 2.7 4.4-2.7A5 5 0 0 0 37 19c0-2.8-2.2-5-5-5z"/>
+  <path fill="#90CAF9" d="M50 32c0-2.8-2.2-5-5-5-1.8 0-3.4.9-4.3 2.3l-2.7 4.4 2.7 4.4A5 5 0 0 0 45 37c2.8 0 5-2.2 5-5z"/>
+  <path fill="#64B5F6" d="M32 50c2.8 0 5-2.2 5-5 0-1.8-.9-3.4-2.3-4.3l-4.4-2.7-4.4 2.7A5 5 0 0 0 27 45c0 2.8 2.2 5 5 5z"/>
+  <path fill="#42A5F5" d="M14 32c0 2.8 2.2 5 5 5 1.8 0 3.4-.9 4.3-2.3l2.7-4.4-2.7-4.4A5 5 0 0 0 19 27c-2.8 0-5 2.2-5 5z"/>
+  <!-- Air flow arcs -->
+  <path d="M18 12c6-4 22-4 28 0" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.4"/>
+  <path d="M16 52c6 4 26 4 32 0" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.4"/>
+  <!-- Inner rotation ring -->
+  <circle cx="32" cy="32" r="14" stroke="#FFFFFF" stroke-width="2" fill="none" opacity="0.6"/>
+</svg>

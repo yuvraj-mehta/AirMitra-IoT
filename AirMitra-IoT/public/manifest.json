@@ -1,0 +1,24 @@
+{
+  "name": "AirMitra-IoT Dashboard",
+  "short_name": "AirMitra",
+  "description": "Progressive Web App for monitoring and controlling AirMitra-IoT smart home devices.",
+  "start_url": "/?source=pwa",
+  "display": "standalone",
+  "background_color": "#0D47A1",
+  "theme_color": "#0D47A1",
+  "lang": "en-US",
+  "orientation": "portrait-primary",
+  "categories": [
+    "utilities",
+    "productivity",
+    "iot"
+  ],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "64x64",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

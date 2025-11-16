@@ -1,20 +1,24 @@
-# Welcome to your Lovable project
+# AirMitra-IoT Dashboard
 
 ## Project info
 
-**URL**: https://lovable.dev/projects/b08bbe51-d2d9-4a37-8366-ab9b20318ef5
+> Progressive Web App for monitoring and controlling smart home sensors and devices (ESP32 + MQTT + Supabase + React).
 
 ## How can I edit this code?
 
 There are several ways of editing your application.
 
-**Use Lovable**
+## Features
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/b08bbe51-d2d9-4a37-8366-ab9b20318ef5) and start prompting.
+- Real-time MQTT sensor streaming (temperature, humidity, motion, device states)
+- Responsive dashboard UI (React + Tailwind + shadcn-ui)
+- Supabase persistence & serverless edge functions
+- Progressive Web App (installable, offline caching, standalone)
+- Service Worker with stale-while-revalidate asset strategy
+- Web App Manifest (`public/manifest.json`) for install prompts
+- Fan-themed favicon & theming
 
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
+## Getting Started (Local Development)
 
 If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
 
@@ -50,24 +54,49 @@ npm run dev
 - Click on "New codespace" to launch a new Codespace environment.
 - Edit files directly within the Codespace and commit and push your changes once you're done.
 
-## What technologies are used for this project?
+## Tech Stack
 
-This project is built with:
+| Layer         | Tech                             |
+| ------------- | -------------------------------- |
+| Frontend      | React + TypeScript + Vite        |
+| UI Components | shadcn-ui + Tailwind CSS         |
+| State/Data    | React Query (planned)            |
+| Backend       | Supabase (DB + Auth + Functions) |
+| Messaging     | MQTT (ESP32 <-> Web)             |
+| PWA           | Manifest + Service Worker        |
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+## PWA Details
 
-## How can I deploy this project?
+- Manifest: `public/manifest.json`
+- Service Worker: `public/sw.js`
+- Registration: `src/main.tsx`
+- Offline Assets: root, HTML, favicon, manifest cached on install
 
-Simply open [Lovable](https://lovable.dev/projects/b08bbe51-d2d9-4a37-8366-ab9b20318ef5) and click on Share -> Publish.
+To test PWA installability:
 
-## Can I connect a custom domain to my Lovable project?
+1. Run `npm run dev`
+2. Open in Chrome at `http://localhost:8080`
+3. Open DevTools > Application > Manifest (verify) & Service Workers
+4. Use "Install App" (Chrome omnibox) if available
 
-Yes, you can!
+## Deployment
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+Build and deploy as any static site:
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+```sh
+npm run build
+# Deploy dist/ to Netlify, Vercel, Cloudflare Pages, or static host
+```
+
+Ensure headers allow service worker (`service-worker-allowed` if nested) – here it's at root so no extra config.
+
+## Future Enhancements
+
+- Add push notifications for threshold alerts
+- Add background sync for queued user commands offline
+- Add advanced caching (Workbox / vite-plugin-pwa)
+- Convert SVG favicon to multi-size PNG set for broader install surface
+
+## License / Attribution
+
+Internal project. All generated Lovable boilerplate removed and replaced with custom AirMitra-IoT implementation.
