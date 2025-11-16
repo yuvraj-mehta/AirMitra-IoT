@@ -1,0 +1,330 @@
+/*******************************************************
+ * SMART BULB & FAN IoT SYSTEM (MQTT + AUTO/MANUAL + BUTTON CONTROL)
+ * Author: Yuvraj Mehta, Sumit Kumar, Akshat Kumar, Vishal Thakur
+ *******************************************************/
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+
+// ---------- Pin Definitions ----------
+#define DHT_PIN 15
+#define PIR_PIN 14
+#define LED_BULB 2
+#define FAN_PWM_PIN 4
+#define RELAY_PIN 13
+
+#define BTN_MODE 32
+#define BTN_BULB 33
+#define BTN_FAN 5
+
+#define RGB_R_PIN 25
+#define RGB_G_PIN 26
+#define RGB_B_PIN 27
+
+#define DHTTYPE DHT22
+DHT dht(DHT_PIN, DHTTYPE);
+
+// ---------- OLED ----------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ---------- WiFi ----------
+const char* ssid = "Wokwi-GUEST";
+const char* password = "";
+const char* mqtt_server = "broker.hivemq.com";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// ---------- Variables ----------
+bool motion = false;
+bool bulbOn = false;
+bool fanOn = false;
+bool isManualMode = false;
+
+int fanSpeed = 100;
+unsigned long lastMotionTime = 0;
+
+unsigned long lastModePress = 0;
+unsigned long lastFanPress = 0;
+unsigned long lastBulbPress = 0;
+
+const unsigned long DEBOUNCE_DELAY = 400;
+const unsigned long MOTION_DELAY = 30000;
+
+char colorHEX[8] = "#FFFFFF";
+
+// ---------- MQTT Topics ----------
+#define TOPIC_TEMP "yuvraj/home/temp"
+#define TOPIC_HUM  "yuvraj/home/hum"
+#define TOPIC_BULB "yuvraj/home/bulb"
+#define TOPIC_FAN  "yuvraj/home/fan"
+#define TOPIC_FAN_SPEED "yuvraj/home/fan/speed"
+#define TOPIC_COLOR "yuvraj/home/color"
+#define TOPIC_MODE  "yuvraj/home/mode"
+#define TOPIC_MOTION "yuvraj/home/motion"
+
+#define TOPIC_CTRL_BULB "yuvraj/home/control/bulb"
+#define TOPIC_CTRL_FAN  "yuvraj/home/control/fan"
+#define TOPIC_CTRL_FAN_SPEED "yuvraj/home/control/fan/speed"
+#define TOPIC_CTRL_COLOR "yuvraj/home/control/color"
+#define TOPIC_CTRL_MODE  "yuvraj/home/control/mode"
+
+// ---------- Interrupt ----------
+void IRAM_ATTR motionISR() {
+  motion = true;
+  lastMotionTime = millis();
+  Serial.println("📡 PIR detected motion!");
+}
+
+// ---------- RGB ----------
+void setRGB(uint8_t r, uint8_t g, uint8_t b) {
+  analogWrite(RGB_R_PIN, r);
+  analogWrite(RGB_G_PIN, g);
+  analogWrite(RGB_B_PIN, b);
+  sprintf(colorHEX, "#%02X%02X%02X", r, g, b);
+  client.publish(TOPIC_COLOR, colorHEX);
+}
+
+// ---------- Device Control ----------
+void setBulb(bool state, bool fromManual = false) {
+  bulbOn = state;
+  digitalWrite(LED_BULB, state ? HIGH : LOW);
+  client.publish(TOPIC_BULB, state ? "ON" : "OFF");
+
+  if (fromManual) {
+    isManualMode = true;
+    client.publish(TOPIC_MODE, "MANUAL");
+  }
+}
+
+void setFan(bool state, bool fromManual = false) {
+  fanOn = state;
+  digitalWrite(RELAY_PIN, state ? HIGH : LOW);
+  analogWrite(FAN_PWM_PIN, fanOn ? map(fanSpeed, 0, 100, 0, 255) : 0);
+
+  client.publish(TOPIC_FAN, state ? "ON" : "OFF");
+
+  if (fromManual) {
+    isManualMode = true;
+    client.publish(TOPIC_MODE, "MANUAL");
+  }
+}
+
+void setFanSpeed(int speed) {
+  fanSpeed = constrain(speed, 0, 100);
+  if (fanOn) analogWrite(FAN_PWM_PIN, map(fanSpeed, 0, 100, 0, 255));
+  char buf[8];
+  sprintf(buf, "%d", fanSpeed);
+  client.publish(TOPIC_FAN_SPEED, buf);
+}
+
+// ---------- OLED WITH MOTION TIME ----------
+void updateOLED(float t, float h) {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+
+  display.setCursor(0, 0);
+  display.println("Smart Home (MQTT)");
+
+  display.setCursor(0, 12);
+  display.printf("Temp: %.1f C", t);
+
+  display.setCursor(0, 22);
+  display.printf("Hum : %.1f %%", h);
+
+  display.setCursor(0, 32);
+  display.printf("Bulb:%s Fan:%s", bulbOn ? "ON" : "OFF", fanOn ? "ON" : "OFF");
+
+  display.setCursor(0, 42);
+  display.printf("Mode:%s Spd:%d%%", isManualMode ? "MAN" : "AUTO", fanSpeed);
+
+  // ---- NEW MOTION STATUS LINE ----
+  display.setCursor(0, 54);
+  unsigned long inactive = (millis() - lastMotionTime) / 1000;
+
+  if (inactive < 3) display.print("Motion: DETECTED");
+  else display.printf("Motion: NONE (%lus ago)", inactive);
+
+  display.display();
+}
+
+// ---------- Mode Toggle ----------
+void toggleMode() {
+  isManualMode = !isManualMode;
+  client.publish(TOPIC_MODE, isManualMode ? "MANUAL" : "AUTO");
+}
+
+// ---------- Publish All States ----------
+void publishAllStates() {
+  client.publish(TOPIC_MODE, isManualMode ? "MANUAL" : "AUTO");
+  client.publish(TOPIC_BULB, bulbOn ? "ON" : "OFF");
+  client.publish(TOPIC_FAN, fanOn ? "ON" : "OFF");
+  client.publish(TOPIC_COLOR, colorHEX);
+
+  char buf[8];
+  sprintf(buf, "%d", fanSpeed);
+  client.publish(TOPIC_FAN_SPEED, buf);
+
+  client.publish(TOPIC_MOTION, "NONE");
+}
+
+// ---------- MQTT Callback ----------
+void callback(char* topic, byte* message, unsigned int length) {
+  String msg;
+  for (int i = 0; i < length; i++) msg += (char)message[i];
+
+  if (String(topic) == TOPIC_CTRL_BULB) setBulb(msg == "ON", true);
+  else if (String(topic) == TOPIC_CTRL_FAN) setFan(msg == "ON", true);
+  else if (String(topic) == TOPIC_CTRL_FAN_SPEED) setFanSpeed(msg.toInt());
+  else if (String(topic) == TOPIC_CTRL_COLOR) {
+    uint8_t r = strtol(msg.substring(1,3).c_str(), NULL, 16);
+    uint8_t g = strtol(msg.substring(3,5).c_str(), NULL, 16);
+    uint8_t b = strtol(msg.substring(5,7).c_str(), NULL, 16);
+    setRGB(r, g, b);
+  }
+  else if (String(topic) == TOPIC_CTRL_MODE) toggleMode();
+}
+
+void reconnectMQTT() {
+  while (!client.connected()) {
+    if (client.connect("esp32-yuvraj")) {
+      client.subscribe(TOPIC_CTRL_BULB);
+      client.subscribe(TOPIC_CTRL_FAN);
+      client.subscribe(TOPIC_CTRL_FAN_SPEED);
+      client.subscribe(TOPIC_CTRL_COLOR);
+      client.subscribe(TOPIC_CTRL_MODE);
+      publishAllStates();
+    }
+    delay(800);
+  }
+}
+
+void setupWiFi() {
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(200);
+}
+
+// ---------- Setup ----------
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(LED_BULB, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(PIR_PIN, INPUT_PULLDOWN);
+  pinMode(BTN_MODE, INPUT_PULLUP);
+  pinMode(BTN_FAN, INPUT_PULLUP);
+  pinMode(BTN_BULB, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(PIR_PIN), motionISR, RISING);
+
+  dht.begin();
+  setRGB(255, 255, 255);
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+  // ---------- CLEAN MINIMAL BOOT ANIMATION ----------
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  for (int i = 0; i <= 100; i += 5) {
+    display.clearDisplay();
+    display.setCursor(20, 20);
+    display.println("Booting...");
+    display.setCursor(18, 35);
+    display.printf("[%3d%%]", i);
+
+    int bar = map(i, 0, 100, 0, 100);
+    display.fillRect(10, 50, bar, 6, SSD1306_WHITE);
+    display.drawRect(10, 50, 100, 6, SSD1306_WHITE);
+
+    display.display();
+    delay(80);
+  }
+
+  setupWiFi();
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+}
+
+// ---------- Loop ----------
+void loop() {
+  if (!client.connected()) reconnectMQTT();
+  client.loop();
+
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+
+  // BUTTON HANDLING
+  if (digitalRead(BTN_MODE) == LOW && millis() - lastModePress > DEBOUNCE_DELAY) {
+    lastModePress = millis();
+    toggleMode();
+  }
+
+  if (digitalRead(BTN_FAN) == LOW && millis() - lastFanPress > DEBOUNCE_DELAY) {
+    lastFanPress = millis();
+    if (!isManualMode) {
+      isManualMode = true;
+      client.publish(TOPIC_MODE, "MANUAL");
+    }
+    setFan(!fanOn, true);
+  }
+
+  if (digitalRead(BTN_BULB) == LOW && millis() - lastBulbPress > DEBOUNCE_DELAY) {
+    lastBulbPress = millis();
+    if (!isManualMode) {
+      isManualMode = true;
+      client.publish(TOPIC_MODE, "MANUAL");
+    }
+    setBulb(!bulbOn, true);
+  }
+
+  // PIR MQTT PUBLISHING  
+  static bool sentNone = true;
+
+  if (motion) {
+    motion = false;
+    client.publish(TOPIC_MOTION, "DETECTED");
+    sentNone = false;
+  }
+
+  if (millis() - lastMotionTime > MOTION_DELAY && !sentNone) {
+    client.publish(TOPIC_MOTION, "NONE");
+    sentNone = true;
+  }
+
+  // AUTO MODE
+  if (!isManualMode) {
+    if (!isnan(t)) {
+      if (t > 28 && !fanOn) setFan(true);
+      if (t <= 28 && fanOn) setFan(false);
+    }
+
+    if (millis() - lastMotionTime < MOTION_DELAY && !bulbOn)
+      setBulb(true);
+    else if (millis() - lastMotionTime >= MOTION_DELAY && bulbOn)
+      setBulb(false);
+  }
+
+  // Sensor Data Publish
+  static unsigned long lastPub = 0;
+  if (millis() - lastPub > 5000) {
+    lastPub = millis();
+    char buf[8];
+    sprintf(buf, "%.1f", t); client.publish(TOPIC_TEMP, buf);
+    sprintf(buf, "%.1f", h); client.publish(TOPIC_HUM, buf);
+    sprintf(buf, "%d", fanSpeed); client.publish(TOPIC_FAN_SPEED, buf);
+  }
+
+  updateOLED(t, h);
+  delay(80);
+}

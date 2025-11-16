@@ -1,0 +1,4 @@
+project_id = "ansyoishtvtgaxztjjln"
+
+[functions.mqtt-websocket-bridge]
+verify_jwt = false

@@ -1,0 +1,46 @@
+# AirMitra-IoT .gitignore
+# Node.js dependencies
+node_modules/
+bun.lockb
+
+# Build output
+/dist
+/build
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Misc
+*.log
+*.tmp
+
+# Supabase
+supabase/.temp
+supabase/.env
+
+# Simulation
+Simulation/*.bin
+Simulation/*.elf
+Simulation/*.hex
+
+# Others
+*.swp
+*.swo
+
+# Ignore public placeholder
+public/placeholder.svg
