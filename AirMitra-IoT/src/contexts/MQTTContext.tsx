@@ -21,6 +21,8 @@ interface SensorData {
 
 interface MQTTContextType {
   isConnected: boolean;
+  isDeviceOnline: boolean;
+  lastDeviceMessageAt?: number | null;
   sensorData: SensorData;
   setBulb: (state: "ON" | "OFF") => void;
   setFan: (state: "ON" | "OFF") => void;
@@ -44,9 +46,11 @@ const MQTTContext = createContext<MQTTContextType | undefined>(undefined);
 
 export const MQTTProvider = ({ children }: { children: ReactNode }) => {
   const [isConnected, setIsConnected] = useState(false);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [sensorData, setSensorData] = useState<SensorData>(defaultSensorData);
   const clientRef = useRef<mqtt.MqttClient | null>(null);
   const dataRef = useRef<SensorData>(defaultSensorData);
+  const lastMsgRef = useRef<number | null>(null);
 
   useEffect(() => {
     console.log("🔌 Initializing MQTT connection...");
@@ -91,6 +95,9 @@ export const MQTTProvider = ({ children }: { children: ReactNode }) => {
 
       const newData = { ...dataRef.current };
 
+      // Track last message time to infer device online status
+      lastMsgRef.current = Date.now();
+
       if (topic === "yuvraj/home/temp") {
         newData.temperature = parseFloat(payload);
       } else if (topic === "yuvraj/home/hum") {
@@ -116,11 +123,13 @@ export const MQTTProvider = ({ children }: { children: ReactNode }) => {
     client.on("error", (err) => {
       console.error("❌ MQTT Error:", err);
       setIsConnected(false);
+      setIsDeviceOnline(false);
     });
 
     client.on("close", () => {
       console.log("🔌 MQTT Disconnected");
       setIsConnected(false);
+      setIsDeviceOnline(false);
     });
 
     // Cleanup only when app unmounts (page closes)
@@ -129,6 +138,26 @@ export const MQTTProvider = ({ children }: { children: ReactNode }) => {
       client.end();
     };
   }, []);
+
+  // Derive device online/offline based on recent inbound messages
+  useEffect(() => {
+    const CHECK_INTERVAL_MS = 1000;
+    const ONLINE_WINDOW_MS = 15000; // device considered online if message within last 15s
+
+    const id = setInterval(() => {
+      if (!isConnected) {
+        if (isDeviceOnline) setIsDeviceOnline(false);
+        return;
+      }
+      const last = lastMsgRef.current;
+      const online = !!last && Date.now() - last < ONLINE_WINDOW_MS;
+      if (online !== isDeviceOnline) {
+        setIsDeviceOnline(online);
+      }
+    }, CHECK_INTERVAL_MS);
+
+    return () => clearInterval(id);
+  }, [isConnected, isDeviceOnline]);
 
   const setBulb = (state: "ON" | "OFF") => {
     if (clientRef.current?.connected) {
@@ -177,6 +206,8 @@ export const MQTTProvider = ({ children }: { children: ReactNode }) => {
     <MQTTContext.Provider
       value={{
         isConnected,
+        isDeviceOnline,
+        lastDeviceMessageAt: lastMsgRef.current,
         sensorData,
         setBulb,
         setFan,

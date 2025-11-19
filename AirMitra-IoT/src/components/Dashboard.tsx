@@ -16,6 +16,7 @@ import { useSensorLogger } from "@/hooks/useSensorLogger";
 const Dashboard = () => {
   const {
     isConnected,
+    isDeviceOnline,
     sensorData,
     setBulb,
     setFan,
@@ -37,23 +38,43 @@ const Dashboard = () => {
           <p className="text-muted-foreground">
             Real-time monitoring and control via MQTT
           </p>
-          <div
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${
-              isConnected
-                ? "bg-primary/10 text-primary"
-                : "bg-muted text-muted-foreground"
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isConnected ? "bg-primary animate-pulse" : "bg-muted-foreground"
+          <div className="flex items-center justify-center gap-3 flex-wrap">
+            <div
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${
+                isConnected
+                  ? "bg-primary/10 text-primary"
+                  : "bg-muted text-muted-foreground"
               }`}
-            />
-            {isConnected ? "Connected to MQTT" : "Connecting..."}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isConnected
+                    ? "bg-primary animate-pulse"
+                    : "bg-muted-foreground"
+                }`}
+              />
+              {isConnected ? "Broker: Connected" : "Broker: Connecting..."}
+            </div>
+            <div
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full ${
+                isDeviceOnline
+                  ? "bg-secondary/10 text-secondary"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isDeviceOnline
+                    ? "bg-secondary animate-pulse"
+                    : "bg-muted-foreground"
+                }`}
+              />
+              {isDeviceOnline ? "Device: Online" : "Device: Offline"}
+            </div>
           </div>
         </div>
 
-        <ModeIndicator mode={sensorData.mode} isConnected={isConnected} />
+        <ModeIndicator mode={sensorData.mode} isDeviceOnline={isDeviceOnline} />
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-6">
           <SensorCard
