@@ -1,0 +1,237 @@
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <Servo.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ---------------- WIFI ----------------
+const char *ssid = "NITP";
+const char *password = "Admin#2024";
+
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+// ---------------- OLED ----------------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// ---------------- PINS ----------------
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+#define IR_PIN 19
+#define SERVO_PIN 13
+#define LED_GREEN 12
+#define LED_RED 14
+
+Servo myServo;
+
+// ---------------- VARIABLES ----------------
+float distance = 0;
+int currentAngle = 0;
+int bestAngle = 0;
+float bestDistance = 999;
+int irState = 0;
+String status = "Idle";
+
+void logState(const String &tag)
+{
+  Serial.print("[");
+  Serial.print(tag);
+  Serial.print("] status=");
+  Serial.print(status);
+  Serial.print(" angle=");
+  Serial.print(currentAngle);
+  Serial.print(" distance=");
+  Serial.print(distance);
+  Serial.print("cm ir=");
+  Serial.println(irState == LOW ? "DETECTED" : "CLEAR");
+}
+
+// ---------------- ULTRASONIC ----------------
+float getDistance()
+{
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // timeout for safety
+  if (duration == 0)
+    return 999;
+
+  return duration * 0.034 / 2;
+}
+
+// ---------------- OLED ----------------
+void showOLED(String msg, int angle, float dist)
+{
+  display.clearDisplay();
+
+  display.setCursor(0, 0);
+  display.println(msg);
+
+  display.setCursor(0, 18);
+  display.print("Angle: ");
+  display.println(angle);
+
+  display.setCursor(0, 36);
+  display.print("Dist: ");
+  display.print(dist);
+  display.println(" cm");
+
+  display.setCursor(0, 54);
+  display.print("IR: ");
+  display.println(irState == LOW ? "YES" : "NO");
+
+  display.display();
+}
+
+// ---------------- WEBSOCKET SEND ----------------
+void sendData()
+{
+  String json = "{";
+  json += "\"status\":\"" + status + "\",";
+  json += "\"angle\":" + String(currentAngle) + ",";
+  json += "\"distance\":" + String(distance) + ",";
+  json += "\"ir\":" + String(irState == LOW ? 1 : 0);
+  json += "}";
+
+  webSocket.broadcastTXT(json);
+  Serial.print("[WS] ");
+  Serial.println(json);
+}
+
+// ---------------- SETUP ----------------
+void setup()
+{
+  Serial.begin(115200);
+  delay(200);
+  Serial.println("\n=== AirMitra Boot ===");
+  Serial.println("Initializing pins, sensors, OLED, WiFi, and WebSocket...");
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(IR_PIN, INPUT);
+
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+
+  myServo.attach(SERVO_PIN);
+
+  // OLED Init
+  Wire.begin(21, 22);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
+  {
+    Serial.println("OLED FAILED");
+    while (true)
+      ;
+  }
+  Serial.println("OLED initialized");
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+
+  // WiFi Connect
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting");
+
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nConnected!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("Use this in dashboard WebSocket client:");
+  Serial.print("ws://");
+  Serial.print(WiFi.localIP());
+  Serial.println(":81");
+
+  // WebSocket
+  webSocket.begin();
+  Serial.println("WebSocket server started on port 81");
+}
+
+// ---------------- LOOP ----------------
+void loop()
+{
+  webSocket.loop();
+  Serial.println("\n--- New Scan Cycle ---");
+
+  bestDistance = 999;
+
+  // -------- SCANNING --------
+  for (int angle = 0; angle <= 180; angle += 10)
+  {
+    myServo.write(angle);
+    delay(150);
+
+    currentAngle = angle;
+
+    irState = digitalRead(IR_PIN);
+    distance = getDistance();
+
+    status = "Scanning";
+    logState("SCAN");
+
+    showOLED(status, angle, distance);
+    sendData();
+
+    // Detection condition
+    if (irState == LOW && distance < 100)
+    {
+      if (distance < bestDistance)
+      {
+        bestDistance = distance;
+        bestAngle = angle;
+        Serial.print("[TRACK] Best target updated -> angle=");
+        Serial.print(bestAngle);
+        Serial.print(" distance=");
+        Serial.print(bestDistance);
+        Serial.println("cm");
+      }
+    }
+
+    webSocket.loop();
+  }
+
+  // -------- DECISION --------
+  if (bestDistance < 100)
+  {
+    status = "Target Found";
+
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
+
+    myServo.write(bestAngle);
+    currentAngle = bestAngle;
+    distance = bestDistance;
+    logState("DECISION");
+    Serial.println("[ACTION] GREEN LED ON, RED LED OFF, Servo moved to target angle");
+
+    showOLED(status, bestAngle, bestDistance);
+  }
+  else
+  {
+    status = "No Target";
+
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, HIGH);
+    currentAngle = 0;
+    distance = 0;
+    irState = digitalRead(IR_PIN);
+    logState("DECISION");
+    Serial.println("[ACTION] GREEN LED OFF, RED LED ON");
+
+    showOLED(status, 0, 0);
+  }
+
+  sendData();
+  delay(300);
+}

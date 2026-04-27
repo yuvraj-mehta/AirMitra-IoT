@@ -1,0 +1,85 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// Wi-Fi credentials
+const char* ssid = "dlink";
+const char* password = "";
+
+// MQTT broker details
+const char* mqtt_server = "10.2.19.61";      // Home Assistant IP
+const char* mqtt_user = "mqttuser";          // MQTT user created in HA (non-admin)
+const char* mqtt_pass = "mqttpassword";      // Corresponding password
+const char* mqtt_topic = "esp32/blink/status";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+const int ledPin = 2; // Onboard LED (GPIO 2)
+bool ledState = false;
+unsigned long lastToggle = 0;
+
+void setup_wifi() {
+  delay(100);
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+  int tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 30) {
+    delay(500);
+    Serial.print(".");
+    tries++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nWiFi connection failed");
+  }
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Connecting to MQTT... ");
+    if (client.connect("ESP32BlinkClient", mqtt_user, mqtt_pass)) {
+      Serial.println("connected!");
+      client.publish(mqtt_topic, "ESP32 connected and blinking");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" retrying in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(ledPin, OUTPUT);
+
+  setup_wifi();
+
+  client.setServer(mqtt_server, 1883);
+  client.setSocketTimeout(10);
+  client.setKeepAlive(60);
+  client.setBufferSize(512);
+  // client.setProtocol(MQTT_VERSION_3_1_1); // ✅ ensures compatibility with Mosquitto
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+
+  client.loop();
+
+  unsigned long now = millis();
+  if (now - lastToggle > 1000) {
+    ledState = !ledState;
+    digitalWrite(ledPin, ledState ? HIGH : LOW);
+    client.publish(mqtt_topic, ledState ? "LED ON" : "LED OFF");
+    lastToggle = now;
+  }
+}

@@ -28,6 +28,7 @@ String stateBaseTopic;
 void applyLedState()
 {
   int duty = 0;
+
   if (powerOn)
   {
     int constrainedBrightness = constrain(brightness, 0, 100);

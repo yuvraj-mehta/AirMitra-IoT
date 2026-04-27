@@ -1,0 +1,340 @@
+#include <WiFi.h>
+#include <WebSocketsServer.h>
+#include <ESP32Servo.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// ---------------- WIFI ----------------
+const char *ssid = "NITP";
+const char *password = "Admin#2024";
+
+WebSocketsServer webSocket = WebSocketsServer(81);
+wl_status_t lastWiFiStatus = WL_IDLE_STATUS;
+unsigned long lastWiFiRetry = 0;
+unsigned long lastSendMs = 0;
+
+// ---------------- OLED ----------------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+bool displayOK = false;
+
+// ---------------- PINS ----------------
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+#define PIR_PIN 19
+#define SERVO_PIN 13
+#define LED_GREEN 12
+#define LED_RED 14
+#define BUZZER_PIN 15
+
+Servo myServo;
+
+// ---------------- VARIABLES ----------------
+float distance = 0;
+int currentAngle = 90; // Start centered
+int sweepStep = 5;
+int sweepCount = 0; // Tracks how many times we sweep before giving up
+int pirState = 0;
+String status = "Idle";
+State lastSystemState = IDLE;
+
+#define SEND_INTERVAL_MS 500
+#define WIFI_RETRY_MS 5000
+#define BEEP_DURATION_MS 100
+#define BEEP_INTERVAL_MS 150
+
+// System States
+enum State
+{
+  IDLE,
+  TRACKING,
+  SEARCHING
+};
+State systemState = IDLE;
+
+const char *wifiStatusText(wl_status_t s)
+{
+  switch (s)
+  {
+  case WL_IDLE_STATUS:
+    return "IDLE";
+  case WL_NO_SSID_AVAIL:
+    return "NO_SSID";
+  case WL_SCAN_COMPLETED:
+    return "SCAN_COMPLETED";
+  case WL_CONNECTED:
+    return "CONNECTED";
+  case WL_CONNECT_FAILED:
+    return "CONNECT_FAILED";
+  case WL_CONNECTION_LOST:
+    return "CONNECTION_LOST";
+  case WL_DISCONNECTED:
+    return "DISCONNECTED";
+  default:
+    return "UNKNOWN";
+  }
+}
+
+void logWiFiStatus(const char *prefix)
+{
+  wl_status_t s = WiFi.status();
+  Serial.printf("[WIFI] %s status=%s (%d)", prefix, wifiStatusText(s), (int)s);
+  if (s == WL_CONNECTED)
+  {
+    Serial.printf(" ip=%s", WiFi.localIP().toString().c_str());
+  }
+  Serial.println();
+}
+
+// ---------------- BUZZER ----------------
+void beep(int count, int durationMs = BEEP_DURATION_MS, int intervalMs = BEEP_INTERVAL_MS)
+{
+  for (int i = 0; i < count; i++)
+  {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(durationMs);
+    digitalWrite(BUZZER_PIN, LOW);
+    if (i < count - 1)
+    {
+      delay(intervalMs);
+    }
+  }
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
+{
+  if (type == WStype_CONNECTED)
+  {
+    IPAddress ip = webSocket.remoteIP(num);
+    Serial.printf("[WS] client %u connected from %u.%u.%u.%u\n", num, ip[0], ip[1], ip[2], ip[3]);
+  }
+  else if (type == WStype_DISCONNECTED)
+  {
+    Serial.printf("[WS] client %u disconnected\n", num);
+  }
+  else if (type == WStype_TEXT)
+  {
+    if (payload != nullptr && length > 0)
+    {
+      Serial.printf("[WS] client %u rx: %.*s\n", num, (int)length, (const char *)payload);
+    }
+  }
+}
+
+// ---------------- ULTRASONIC ----------------
+float getDistance()
+{
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0)
+    return 999;
+
+  return duration * 0.034 / 2;
+}
+
+// ---------------- OLED ----------------
+void showOLED(const char *msg, int angle, float dist)
+{
+  if (!displayOK)
+    return;
+
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println(msg);
+  display.setCursor(0, 18);
+  display.printf("Angle: %d\n", angle);
+  display.setCursor(0, 36);
+  display.printf("Dist: %.1f cm\n", dist);
+  display.setCursor(0, 54);
+  display.printf("PIR: %s\n", pirState ? "YES" : "NO");
+  display.display();
+}
+
+// ---------------- WEBSOCKET ----------------
+void sendData()
+{
+  if (millis() - lastSendMs < SEND_INTERVAL_MS)
+    return;
+  lastSendMs = millis();
+
+  char json[120];
+  snprintf(json, sizeof(json),
+           "{\"status\":\"%s\",\"angle\":%d,\"distance\":%.2f,\"human\":%d}",
+           status.c_str(),
+           currentAngle,
+           distance,
+           pirState);
+
+  webSocket.broadcastTXT(json);
+  Serial.print("[WS][TX] ");
+  Serial.println(json);
+}
+
+// ---------------- SETUP ----------------
+void setup()
+{
+  Serial.begin(115200);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(PIR_PIN, INPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  myServo.attach(SERVO_PIN);
+  myServo.write(currentAngle); // Center servo
+
+  Wire.begin(21, 22);
+  displayOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+
+  if (displayOK)
+  {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+  }
+
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  Serial.printf("[WIFI] Connecting SSID: %s\n", ssid);
+  WiFi.begin(ssid, password);
+  lastWiFiStatus = WiFi.status();
+  logWiFiStatus("begin");
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  logWiFiStatus("connected");
+
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+  webSocket.enableHeartbeat(15000, 3000, 2);
+  Serial.println("[WS] server started on :81");
+}
+
+// ---------------- LOOP ----------------
+void loop()
+{
+  wl_status_t currentWiFiStatus = WiFi.status();
+  if (currentWiFiStatus != lastWiFiStatus)
+  {
+    logWiFiStatus("state-change");
+    lastWiFiStatus = currentWiFiStatus;
+  }
+
+  if (currentWiFiStatus != WL_CONNECTED)
+  {
+    if (millis() - lastWiFiRetry >= WIFI_RETRY_MS)
+    {
+      lastWiFiRetry = millis();
+      Serial.println("[WIFI] reconnecting...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, password);
+    }
+    delay(10);
+    return;
+  }
+
+  webSocket.loop();
+  pirState = digitalRead(PIR_PIN);
+  distance = getDistance();
+
+  switch (systemState)
+  {
+  // -------- STATE 1: IDLE (Empty Room) --------
+  case IDLE:
+    status = "Idle";
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, HIGH);
+
+    // If a human walks in, wake up and track!
+    if (pirState == HIGH)
+    {
+      beep(1); // Single beep on detection
+      systemState = TRACKING;
+    }
+    break;
+
+  // -------- STATE 2: TRACKING (Human Found) --------
+  case TRACKING:
+    status = "Target Locked";
+    digitalWrite(LED_GREEN, HIGH);
+    digitalWrite(LED_RED, LOW);
+
+    if (pirState == HIGH)
+    {
+      // Human is in crosshairs. Stay still and measure.
+      showOLED("Locked", currentAngle, distance);
+      delay(300); // Prevent WebSocket spam
+    }
+    else
+    {
+      // Human moved out of view! Start looking for them.
+      beep(2); // Double beep on loss
+      systemState = SEARCHING;
+      sweepCount = 0; // Reset search counter
+    }
+    break;
+
+  // -------- STATE 3: SEARCHING (Lost Human) --------
+  case SEARCHING:
+    status = "Searching";
+    digitalWrite(LED_GREEN, LOW);
+    digitalWrite(LED_RED, HIGH);
+
+    if (pirState == HIGH)
+    {
+      // Found them again! Stop sweeping immediately.
+      systemState = TRACKING;
+    }
+    else
+    {
+      // Sweep the servo to find the human
+      currentAngle += sweepStep;
+      if (currentAngle >= 180)
+      {
+        currentAngle = 180;
+        sweepStep = -5;
+        sweepCount++; // Count how many times we reverse direction
+      }
+      else if (currentAngle <= 0)
+      {
+        currentAngle = 0;
+        sweepStep = 5;
+        sweepCount++;
+      }
+      myServo.write(currentAngle);
+
+      showOLED("Searching...", currentAngle, 0); // Distance 0 while moving
+      delay(50);                                 // Speed of the sweep
+
+      // If we sweep back and forth 2 times and find no one, give up.
+      if (sweepCount >= 2)
+      {
+        systemState = IDLE;
+        currentAngle = 90; // Return to center
+        myServo.write(currentAngle);
+        distance = 0;
+
+        showOLED("Idle", currentAngle, distance);
+      }
+    }
+    break;
+  }
+
+  sendData();
+  lastSystemState = systemState;
+}

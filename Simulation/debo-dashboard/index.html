@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Smart Scanner Dashboard</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Inter;
+      background: #0b1220;
+      color: white;
+    }
+
+    .wrap {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 20px;
+      padding: 20px;
+    }
+
+    .card {
+      background: #111a2e;
+      padding: 15px;
+      border-radius: 12px;
+    }
+
+    .metric {
+      font-size: 24px;
+      font-weight: bold;
+    }
+
+    #radar {
+      width: 100%;
+      height: 500px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="wrap">
+
+    <!-- LEFT -->
+    <div class="card">
+      <h2>Smart Scanner</h2>
+
+      <input id="ws" value="ws://10.2.19.39:81"
+        style="width:100%;padding:8px;border:none;border-radius:6px;background:#000;color:#fff;">
+      <button onclick="connect()"
+        style="margin-top:10px;width:100%;padding:10px;border:none;border-radius:6px;background:#60e1b6;font-weight:bold;">
+        Connect
+      </button>
+
+      <br><br>
+
+      <div>
+        <span id="dot" class="dot" style="background:gray"></span>
+        <span id="connStatus">Disconnected</span>
+      </div>
+
+      <br>
+
+      <div>Angle: <span class="metric" id="angle">--</span></div>
+      <div>Distance: <span class="metric" id="distance">--</span> cm</div>
+      <div>Human: <span class="metric" id="human">--</span></div>
+
+      <br>
+
+      <div id="modeText" style="font-weight:bold;font-size:16px;">Mode: --</div>
+
+      <br>
+
+      <div id="log" style="max-height:200px;overflow:auto;font-size:12px;"></div>
+    </div>
+
+    <!-- RIGHT -->
+    <div class="card">
+      <canvas id="radar"></canvas>
+    </div>
+
+  </div>
+
+  <script>
+    let ws;
+    let reconnectTimer = null;
+    let manualClose = false;
+
+    const canvas = document.getElementById("radar");
+    const ctx = canvas.getContext("2d");
+
+    let w, h, cx, cy, radius;
+
+    function resize() {
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+      w = canvas.width;
+      h = canvas.height;
+      cx = w / 2;
+      cy = h * 0.8;
+      radius = Math.min(w * 0.4, h * 0.8);
+    }
+    resize();
+    window.onresize = resize;
+
+    // STATE
+    let angle = 0;
+    let mode = "Idle";
+    let blips = [];
+    let sweep = 0;
+
+    // DRAW RADAR
+    function draw() {
+      ctx.clearRect(0, 0, w, h);
+
+      // rings
+      ctx.strokeStyle = "rgba(0,255,150,0.2)";
+      for (let r = radius; r > 0; r -= radius / 4) {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, Math.PI, 2 * Math.PI);
+        ctx.stroke();
+      }
+
+      // SCAN SWEEP
+      if (mode === "Searching") {
+        let a = sweep * Math.PI / 180;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + radius * Math.cos(a), cy - radius * Math.sin(a));
+        ctx.strokeStyle = "rgba(0,255,150,0.6)";
+        ctx.stroke();
+        sweep += 2;
+      }
+
+      // SERVO LINE
+      let rad = (angle - 90) * Math.PI / 180;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + radius * Math.cos(rad), cy - radius * Math.sin(rad));
+      ctx.strokeStyle = "cyan";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.lineWidth = 1;
+
+      // BLIPS
+      let now = Date.now();
+      blips = blips.filter(b => now - b.time < 2000);
+
+      for (let b of blips) {
+        let ang = (b.angle - 90) * Math.PI / 180;
+        let r = (b.distance / 200) * radius;
+
+        let x = cx + r * Math.cos(ang);
+        let y = cy - r * Math.sin(ang);
+
+        ctx.fillStyle = (mode === "Target Locked") ? "red" : "lime";
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+
+      requestAnimationFrame(draw);
+    }
+    draw();
+
+    // STATUS UI
+    function setConnectionStatus(s) {
+      let dot = document.getElementById("dot");
+
+      if (s === "Connected") dot.style.background = "lime";
+      else dot.style.background = "gray";
+
+      document.getElementById("connStatus").innerText = s;
+    }
+
+    function setModeStatus(s) {
+      let dot = document.getElementById("dot");
+
+      if (s === "Idle") dot.style.background = "gray";
+      else if (s === "Searching") dot.style.background = "orange";
+      else if (s === "Target Locked") dot.style.background = "lime";
+      else if (s !== "Connected") dot.style.background = "gray";
+
+      document.getElementById("modeText").innerText = "Mode: " + s;
+    }
+
+    // CONNECT
+    function connect() {
+      let uri = document.getElementById("ws").value;
+      manualClose = false;
+
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+      }
+
+      ws = new WebSocket(uri);
+
+      ws.onopen = () => setConnectionStatus("Connected");
+
+      ws.onmessage = (msg) => {
+        let d;
+        try {
+          d = JSON.parse(msg.data);
+        } catch (_e) {
+          return;
+        }
+
+        if (typeof d.angle !== "number" || typeof d.distance !== "number") return;
+
+        angle = d.angle;
+        mode = (typeof d.status === "string") ? d.status : mode;
+
+        document.getElementById("angle").innerText = d.angle;
+        document.getElementById("distance").innerText = d.distance.toFixed(1);
+        document.getElementById("human").innerText = d.human ? "YES" : "NO";
+
+        setModeStatus(mode);
+
+        if (d.human && d.distance > 0 && d.distance < 150) {
+          blips.push({
+            angle: d.angle,
+            distance: d.distance,
+            time: Date.now()
+          });
+        }
+
+        let log = document.getElementById("log");
+        let el = document.createElement("div");
+        el.innerText = `${mode} | ${d.angle}° | ${d.distance.toFixed(1)}cm | human=${d.human ? 1 : 0}`;
+        log.prepend(el);
+
+        if (log.childElementCount > 40)
+          log.removeChild(log.lastChild);
+      };
+
+      ws.onerror = () => setConnectionStatus("Disconnected");
+      ws.onclose = () => {
+        setConnectionStatus("Disconnected");
+        if (!manualClose) {
+          reconnectTimer = setTimeout(connect, 1500);
+        }
+      };
+    }
+
+    window.addEventListener("beforeunload", () => {
+      manualClose = true;
+      if (ws) ws.close();
+    });
+  </script>
+
+</body>
+
+</html>

@@ -1,0 +1,175 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+const char* ssid = "NITP";
+const char* password = "Admin#2024";
+
+const char* ha_server = "http://10.2.19.61:8123";
+const char* token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJkNDJiNzUwMTE1Nzc0NWYzYjNlODQ2ZjQ0ODMyZmI3NSIsImlhdCI6MTc3MTE2NzI4MiwiZXhwIjoyMDg2NTI3MjgyfQ.afk-pRKksKpvK5OHkkeqyiZem3mNFQgNSmfh1RxOeTw";
+
+const char* entity_id = "input_boolean.esp32_light";
+
+unsigned long lastPoll = 0;
+const unsigned long pollInterval = 2000;
+
+bool lastLedState = false;
+
+void connectWiFi() {
+
+  Serial.println("\n========== WIFI CONNECTION START ==========");
+  Serial.print("SSID: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  int attempt = 0;
+
+  while (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(250);
+
+    Serial.print(".");
+    attempt++;
+
+    if (attempt % 10 == 0) {
+      Serial.println("\nStill trying to connect...");
+    }
+  }
+
+  Serial.println("\n✅ WIFI CONNECTED");
+  Serial.print("ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("Gateway: ");
+  Serial.println(WiFi.gatewayIP());
+  Serial.print("Signal Strength (RSSI): ");
+  Serial.println(WiFi.RSSI());
+
+  Serial.println("===========================================\n");
+}
+
+void toggleEntity() {
+
+  Serial.println("\n========== TOGGLE REQUEST ==========");
+
+  HTTPClient http;
+  String url = String(ha_server) + "/api/services/input_boolean/toggle";
+  String payload = "{\"entity_id\": \"" + String(entity_id) + "\"}";
+
+  Serial.print("POST URL: ");
+  Serial.println(url);
+
+  Serial.print("Payload: ");
+  Serial.println(payload);
+
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + String(token));
+
+  int httpCode = http.POST(payload);
+
+  Serial.print("HTTP Response Code: ");
+  Serial.println(httpCode);
+
+  String response = http.getString();
+
+  Serial.println("Response Body:");
+  Serial.println(response);
+
+  if (httpCode == 200) {
+    Serial.println("✅ TOGGLE SUCCESS");
+  } else {
+    Serial.println("❌ TOGGLE FAILED");
+  }
+
+  http.end();
+
+  Serial.println("=====================================\n");
+}
+
+void checkState() {
+
+  Serial.println("\n========== STATE POLL ==========");
+  Serial.print("Polling at millis(): ");
+  Serial.println(millis());
+
+  HTTPClient http;
+  String url = String(ha_server) + "/api/states/" + String(entity_id);
+
+  Serial.print("GET URL: ");
+  Serial.println(url);
+
+  http.begin(url);
+  http.addHeader("Authorization", "Bearer " + String(token));
+
+  int httpCode = http.GET();
+
+  Serial.print("HTTP Response Code: ");
+  Serial.println(httpCode);
+
+  if (httpCode == 200) {
+
+    String response = http.getString();
+
+    Serial.println("Full State Response:");
+    Serial.println(response);
+
+    bool currentState = false;
+
+    if (response.indexOf("\"state\":\"on\"") != -1) {
+      currentState = true;
+    }
+
+    Serial.print("Parsed State: ");
+    Serial.println(currentState ? "ON" : "OFF");
+
+    if (currentState != lastLedState) {
+      Serial.println("🔄 LED STATE CHANGE DETECTED");
+
+      digitalWrite(LED_BUILTIN, currentState ? HIGH : LOW);
+
+      Serial.print("LED is now: ");
+      Serial.println(currentState ? "ON" : "OFF");
+
+      lastLedState = currentState;
+    } else {
+      Serial.println("No LED change needed.");
+    }
+
+  } else {
+    Serial.println("❌ Failed to fetch state from HA");
+  }
+
+  http.end();
+  Serial.println("=================================\n");
+}
+
+void setup() {
+
+  Serial.begin(115200);
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  Serial.println("\n\n===========================================");
+  Serial.println("   ESP32 ↔ Home Assistant REST DEBUG MODE   ");
+  Serial.println("===========================================\n");
+
+  connectWiFi();
+
+  delay(1000);
+
+  toggleEntity();
+}
+
+void loop() {
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\n⚠️ WIFI DISCONNECTED! Reconnecting...");
+    connectWiFi();
+  }
+
+  if (millis() - lastPoll > pollInterval) {
+    lastPoll = millis();
+    checkState();
+  }
+}
